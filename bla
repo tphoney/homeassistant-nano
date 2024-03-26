@@ -1,0 +1,242 @@
+package main
+
+import (
+	"machine"
+	"strconv"
+	"time"
+
+	"tinygo.org/x/drivers/netlink"
+	"tinygo.org/x/drivers/netlink/probe"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"tinygo.org/x/drivers/dht"
+)
+
+var (
+	ssid    string
+	pass    string
+	address string
+
+	// conn       net.Conn
+	mqttClient mqtt.Client
+)
+
+// Wait for user to open serial console
+func waitSerial() {
+	for !machine.Serial.DTR() {
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// func dialConnection() {
+// 	var err error
+
+// 	println("\r\n---------------\r\nDialing TCP connection")
+// 	conn, err = net.Dial("tcp", address)
+// 	for ; err != nil; conn, err = net.Dial("tcp", address) {
+// 		println("Connection failed:", err.Error())
+// 		time.Sleep(5 * time.Second)
+// 	}
+// 	println("Connected!\r")
+// }
+
+// func check(err error) {
+// 	if err != nil {
+// 		println("Hit an error:", err.Error())
+// 		panic("BYE")
+// 	}
+// }
+
+func GetTemperatureHumidity() (temperature, humidity string) {
+	pin := machine.D2
+	dhtDevice := dht.New(pin, dht.DHT11)
+	temp, hum, err := dhtDevice.Measurements()
+	if err != nil {
+		return "0", "0"
+	}
+	temp, hum = (temp / 10), (hum / 10)
+	return strconv.FormatInt(int64(temp), 10), strconv.FormatInt(int64(hum), 10)
+}
+
+// func makeGetRequest() {
+// 	println("Sending HTTP request...")
+// 	w := bufio.NewWriter(conn)
+// 	w.WriteString("GET / HTTP/1.1\r\n")
+// 	w.WriteString("Host: " + address + ":9000\r\n")
+// 	w.WriteString("User-Agent: TinyGo\r\n")
+// 	w.WriteString("Connection: close\r\n")
+// 	w.WriteString("\r\n")
+// 	check(w.Flush())
+// 	println("Sent!\r\n\r")
+// }
+
+// func readResponse() {
+// 	r := bufio.NewReader(conn)
+// 	_, err := io.ReadAll(r)
+// 	check(err)
+// 	// println(string(resp))
+// }
+
+// func closeConnection() {
+// 	conn.Close()
+// }
+
+func main() {
+	waitSerial()
+
+	link, _ := probe.Probe()
+
+	err := link.NetConnect(&netlink.ConnectParams{
+		Ssid:       ssid,
+		Passphrase: pass,
+	})
+	if err != nil {
+		println(err.Error())
+	}
+
+	mac, _ := link.GetHardwareAddr()
+	mqttClient := createMqttClient(mac.String())
+	for i := 0; ; i++ {
+		// dialConnection()
+		// makeGetRequest()
+		// readResponse()
+		// closeConnection()
+		temperature, humidity := GetTemperatureHumidity()
+		mqttErr := sendMqttMessage(mqttClient, "temperature", temperature)
+		if mqttErr != nil {
+			println("error during mqtt publish %s:%s\n", "temperature", mqttErr)
+		}
+		mqttErr = sendMqttMessage(mqttClient, "humidity", humidity)
+		if mqttErr != nil {
+			println("error during mqtt publish %s:%s\n", "humidity", mqttErr)
+		}
+		println("--------", i, "--------\r\n")
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func createMqttClient(macAddress string) mqtt.Client {
+	mqttOptions := mqtt.NewClientOptions()
+	mqttOptions.AddBroker(address).SetClientID(macAddress)
+
+	mqttClient := mqtt.NewClient(mqttOptions)
+	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+		println("mqtt %s\n", token.Error().Error())
+
+	}
+	println("connected to MQTT: " + address)
+	return mqttClient
+}
+
+func sendMqttMessage(mqttClient mqtt.Client, topic, data string) (err error) {
+	println("sending MQTT message")
+	token := mqttClient.Publish(topic, 0, false, data)
+	token.Wait()
+	if err := token.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// func main() {
+// 	println("starting")
+// 	// Connect to wifi
+// 	var macAddress string
+// 	var connectErr error
+// 	adapter := wifi.SetupNina()
+// 	for {
+// 		for macAddress == "" {
+// 			macAddress, _, connectErr = wifi.Connect(APName, APPassword)
+// 			if connectErr != nil {
+// 				println(connectErr)
+// 			}
+// 			// sleep for 5 seconds
+// 			time.Sleep(time.Second * 5)
+// 		}
+// 		// setup onboard device for sensor data
+// 		// machine.I2C0.Configure(machine.I2CConfig{})
+// 		// lsm6ds3Device := lsm6ds3.New(machine.I2C0)
+// 		// lsm6ds3Device.Configure(lsm6ds3.Configuration{})
+// 		// lsm6dsConnected := lsm6ds3Device.Connected()
+// 		// if !lsm6dsConnected {
+// 		// 	fmt.Println("lsm6ds3: failed to communicate with sensor")
+// 		// }
+// 		pin := machine.D2
+// 		dhtDevice := dht.New(pin, dht.DHT11)
+// 		for {
+// 			// read sensor data
+// 			// onboardTemperature, onboardTemperatureErr := onboardTemperature(lsm6ds3Device)
+// 			// if onboardTemperatureErr != nil {
+// 			// 	fmt.Printf("onboard temperature error:%s\n", onboardTemperatureErr)
+// 			// }
+// 			// fmt.Printf("onboard temperature: %d\n", onboardTemperature)
+
+// 			dhtTemperature, dhtHumidity, dhtErr := dhtSensor(dhtDevice)
+// 			if dhtErr != nil {
+// 				println("dht error:" + dhtErr.Error())
+// 			}
+// 			println("external temperature:" + dhtTemperature + ". humidity " + dhtHumidity)
+// 			homeErr := sendHomeAssistantMessage(Token, Server, "humidity", "%", dhtHumidity)
+// 			if homeErr != nil {
+// 				println("error during home assistant publish humidity: " + homeErr.Error())
+// 			}
+// 			homeErr = sendHomeAssistantMessage(Token, Server, "temperature", "°C", dhtTemperature)
+// 			if homeErr != nil {
+// 				println("error during home assistant publish temperature: " + homeErr.Error())
+// 			}
+// 			time.Sleep(time.Second * 60)
+// 		}
+// 	}
+// }
+
+// // func onboardTemperature(device *lsm6ds3.Device) (int32, error) {
+// // 	rawTemperature, temperatureErr := device.ReadTemperature()
+// // 	if temperatureErr != nil {
+// // 		return 0, temperatureErr
+// // 	}
+// // 	onboardTemperature := rawTemperature / 1000
+// // 	return onboardTemperature, nil
+// // }
+
+// func dhtSensor(device dht.Device) (temperature string, humidity string, err error) {
+// 	temp, error := device.TemperatureFloat(dht.C)
+// 	if error != nil {
+// 		return "", "", error
+// 	}
+// 	temperature = strconv.FormatFloat(float64(temp), 'f', 2, 32)
+// 	hum, error := device.HumidityFloat()
+// 	if error != nil {
+// 		return "", "", error
+// 	}
+// 	humidity = strconv.FormatFloat(float64(hum), 'f', 2, 32)
+// 	return temperature, humidity, nil
+// }
+
+// var buf [0x600]byte
+
+// func sendHomeAssistantMessage(token, server, name, unitOfMeasurement, value string) (err error) {
+// 	return nil
+// }
+
+// 	http.SetBuf(buf[:])
+// 	fq := "http://" + server + ":8123/api/states/sensor." + name
+// 	print("sending to " + fq)
+// 	body := `{"state": "` + value + `", "attributes": {"unit_of_measurement": "` + unitOfMeasurement + `"}}`
+// 	// println(body)
+// 	newRequest, err := http.NewRequest("POST", fq, strings.NewReader(body))
+// 	if err != nil {
+// 		println(fq + ":" + err.Error())
+// 		return err
+// 	}
+// 	newRequest.Header.Set("Authorization", ("Bearer " + token))
+// 	newRequest.Header.Set("Content-Type", "application/json")
+// 	// create http client
+// 	_, httpErr := http.DefaultClient.Do(newRequest)
+
+// 	if httpErr != nil {
+// 		println(fq + ":" + httpErr.Error())
+// 		return httpErr
+// 	}
+// 	println(" ok")
+// 	return nil
+// }
