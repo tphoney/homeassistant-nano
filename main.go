@@ -2,20 +2,31 @@ package main
 
 import (
 	"machine"
-	"net"
 	"strconv"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"tinygo.org/x/drivers/dht"
 	"tinygo.org/x/drivers/netlink"
 	"tinygo.org/x/drivers/netlink/probe"
 )
 
 var (
-	ssid    string
-	pass    string
-	address string
-	link    netlink.Netlinker
+	ssid              string
+	pass              string
+	address           string
+	link              netlink.Netlinker
+	messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
+		println("Message " + string(msg.Payload()) + ". Topic " + msg.Topic())
+	}
+
+	connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
+		println("Connected")
+	}
+
+	connectionLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err error) {
+		println("Connection Lost: ", err.Error())
+	}
 )
 
 const (
@@ -66,16 +77,29 @@ func connectWiFi() {
 }
 
 func publishMQTT(message string) error {
-	conn, err := net.Dial("tcp", address+":1883")
-	if err != nil {
-		link.NetDisconnect()
-		time.Sleep(5 * time.Second)
-		connectWiFi()
-		return err
-	}
-	defer conn.Close()
+	broker := "tcp://" + address + ":1883"
+	clientId := "tinygo-client"
+	options := mqtt.NewClientOptions()
 
-	// Simple publish message (no QoS, retain)
-	_, err = conn.Write([]byte("PUBLISH " + topic + "0 0\n" + message + "\n"))
-	return err
+	options.AddBroker(broker)
+	options.SetClientID(clientId)
+	options.SetDefaultPublishHandler(messagePubHandler)
+	options.OnConnect = connectHandler
+	options.OnConnectionLost = connectionLostHandler
+
+	println("Connecting to MQTT broker at ", broker)
+	client := mqtt.NewClient(options)
+	token := client.Connect()
+	if token.Wait() && token.Error() != nil {
+		sleep := 5 * time.Second
+		link.NetDisconnect()
+		time.Sleep(sleep)
+		connectWiFi()
+		return token.Error()
+	}
+
+	token = client.Publish(topic, 0, false, message)
+	time.Sleep(1 * time.Second)
+	client.Disconnect(250)
+	return token.Error()
 }
