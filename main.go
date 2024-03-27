@@ -1,32 +1,24 @@
 package main
 
 import (
+	"context"
+	"io"
 	"machine"
+	"net"
 	"strconv"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	mqtt "github.com/soypat/natiu-mqtt"
 	"tinygo.org/x/drivers/dht"
 	"tinygo.org/x/drivers/netlink"
 	"tinygo.org/x/drivers/netlink/probe"
 )
 
 var (
-	ssid              string
-	pass              string
-	address           string
-	link              netlink.Netlinker
-	messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
-		println("Message " + string(msg.Payload()) + ". Topic " + msg.Topic())
-	}
-
-	connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
-		println("Connected")
-	}
-
-	connectionLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err error) {
-		println("Connection Lost: ", err.Error())
-	}
+	ssid    string
+	pass    string
+	address string
+	link    netlink.Netlinker
 )
 
 const (
@@ -40,7 +32,7 @@ func main() {
 	// Connect to WiFi
 	connectWiFi()
 	println("Connected to WiFi")
-
+	time.Sleep(5 * time.Second)
 	for {
 		// Read temperature and humidity
 		temp, hum, err := sensor.Measurements()
@@ -77,29 +69,62 @@ func connectWiFi() {
 }
 
 func publishMQTT(message string) error {
-	broker := "tcp://" + address + ":1883"
-	clientId := "tinygo-client"
-	options := mqtt.NewClientOptions()
+	broker := address + ":1883"
+	clientId := "arduino-tinygo-sensor"
 
-	options.AddBroker(broker)
-	options.SetClientID(clientId)
-	options.SetDefaultPublishHandler(messagePubHandler)
-	options.OnConnect = connectHandler
-	options.OnConnectionLost = connectionLostHandler
-
-	println("Connecting to MQTT broker at ", broker)
-	client := mqtt.NewClient(options)
-	token := client.Connect()
-	if token.Wait() && token.Error() != nil {
-		sleep := 5 * time.Second
+	conn, err := net.Dial("tcp", broker)
+	if err != nil {
 		link.NetDisconnect()
-		time.Sleep(sleep)
+		time.Sleep(5 * time.Second)
 		connectWiFi()
-		return token.Error()
+		return err
 	}
+	defer conn.Close()
 
-	token = client.Publish(topic, 0, false, message)
-	time.Sleep(1 * time.Second)
-	client.Disconnect(250)
-	return token.Error()
+	println("Connected via TCP")
+	client := mqtt.NewClient(mqtt.ClientConfig{
+		Decoder: mqtt.DecoderNoAlloc{make([]byte, 1500)},
+		OnPub: func(_ mqtt.Header, _ mqtt.VariablesPublish, r io.Reader) error {
+			message, _ := io.ReadAll(r)
+			println("received message:", string(message))
+			return nil
+		},
+	})
+	println("Client created")
+	// Connect client
+	var varConn mqtt.VariablesConnect
+	println("1")
+	varConn.SetDefaultMQTT([]byte(clientId))
+	println("2")
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	println("3")
+	err = client.Connect(ctx, conn, &varConn) // Connect to server.
+	println("4")
+	cancel()
+	println("5")
+	if err != nil {
+		// Error or loop until connect success.
+		println("connect attempt failed:", err)
+		return err
+	}
+	println("Connected to MQTT broker")
+
+	// // Publish on topic
+	// pubFlags, _ := mqtt.NewPublishFlags(mqtt.QoS0, false, false)
+	// pubVar := mqtt.VariablesPublish{
+	// 	TopicName: []byte(topic),
+	// }
+
+	// err = client.PublishPayload(pubFlags, pubVar, []byte(message))
+	// if err != nil {
+	// 	println("failed to publish: ", err)
+	// 	return err
+	// }
+
+	// time.Sleep(time.Second)
+
+	// conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+	client.Disconnect(err)
+	return nil
 }
