@@ -69,7 +69,6 @@ func main() {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-
 		// Handle connection (simplified)
 		err = handleHTTPConnection()
 		if err != nil {
@@ -109,6 +108,6 @@ func handleHTTPConnection() (err error) {
 		println("Error writing response:", err)
 		return err
 	}
-	println("Request processed at: ", time.Now().Format("2006-01-02 15:04:05"))
+	println("Request processed")
 	return nil
 }

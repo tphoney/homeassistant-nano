@@ -129,5 +129,5 @@ run:
   skip-files:
     - _gen\.go
   skip-dirs:
-    - /home/tp/.cache/tinygo
-    - ~/.cache/tinygo/
+    - /home/$USER/.cache
+    - ~/.cache
