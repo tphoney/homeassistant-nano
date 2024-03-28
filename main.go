@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
-	"io"
 	"machine"
 	"net"
 	"strconv"
 	"time"
 
-	mqtt "github.com/soypat/natiu-mqtt"
 	"tinygo.org/x/drivers/dht"
 	"tinygo.org/x/drivers/netlink"
 	"tinygo.org/x/drivers/netlink/probe"
@@ -17,46 +14,76 @@ import (
 var (
 	ssid    string
 	pass    string
-	address string
+	message string
 	link    netlink.Netlinker
+	sensor  = dht.New(pin, dht.DHT11)
+	conn    net.Conn
+	buf     = make([]byte, 256)
 )
 
 const (
 	topic = "temperature/humidity"
+	pin   = machine.D2
 )
 
 func main() {
-	// Configure DHT sensor pin (replace with your actual pin)
-	pin := machine.D2
-	sensor := dht.New(pin, dht.DHT11)
 	// Connect to WiFi
 	connectWiFi()
 	println("Connected to WiFi")
-	time.Sleep(5 * time.Second)
+	time.Sleep(2 * time.Second)
+	go func() {
+		for {
+			// Read temperature and humidity
+			temp, hum, err := sensor.Measurements()
+			if err != nil {
+				println("Error reading DHT sensor:", err)
+				continue
+			}
+			temp, hum = (temp / 10), (hum / 10)
+
+			message = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" +
+				`{"humidity":` + strconv.FormatInt(int64(hum), 10) + `, "temperature":` + strconv.FormatInt(int64(temp), 10) + "}\r\n"
+
+			time.Sleep(time.Second * 30) // Adjust interval between readings
+		}
+	}()
+
+	listener, err := net.Listen("tcp", ":80")
+	if err != nil {
+		println("Error listening:", err)
+		return
+	}
+	defer listener.Close()
+
+	println("Server listening on port 80...")
+
 	for {
-		// Read temperature and humidity
-		temp, hum, err := sensor.Measurements()
+		// Accept incoming connection
+		conn, err = listener.Accept()
 		if err != nil {
-			println("Error reading DHT sensor:", err)
+			println("Error accepting connection:", err)
+			conn.Close()
+			link.NetDisconnect()
+			time.Sleep(5 * time.Second)
+			connectWiFi()
+			time.Sleep(5 * time.Second)
 			continue
 		}
-		temp, hum = (temp / 10), (hum / 10)
-		// Prepare MQTT message
-		message := `{"humidity":` + strconv.FormatInt(int64(hum), 10) + `"temperature"` + strconv.FormatInt(int64(temp), 10) + `}`
-		// Publish MQTT message
-		err = publishMQTT(message)
+
+		// Handle connection (simplified)
+		err = handleHTTPConnection()
 		if err != nil {
-			println("Error publishing MQTT:", err)
-			continue
+			link.NetDisconnect()
+			time.Sleep(5 * time.Second)
+			connectWiFi()
+			time.Sleep(5 * time.Second)
 		}
-		println("Sent MQTT message:", message)
-		time.Sleep(time.Second * 10) // Adjust interval between readings
+		conn.Close()
 	}
 }
 
 func connectWiFi() {
 	link, _ = probe.Probe()
-
 	err := link.NetConnect(&netlink.ConnectParams{
 		Ssid:       ssid,
 		Passphrase: pass,
@@ -68,63 +95,20 @@ func connectWiFi() {
 	}
 }
 
-func publishMQTT(message string) error {
-	broker := address + ":1883"
-	clientId := "arduino-tinygo-sensor"
-
-	conn, err := net.Dial("tcp", broker)
+func handleHTTPConnection() (err error) {
+	// Read request (simplified)
+	_, err = conn.Read(buf)
 	if err != nil {
-		link.NetDisconnect()
-		time.Sleep(5 * time.Second)
-		connectWiFi()
+		println("Error reading request:", err)
 		return err
 	}
-	defer conn.Close()
 
-	println("Connected via TCP")
-	client := mqtt.NewClient(mqtt.ClientConfig{
-		Decoder: mqtt.DecoderNoAlloc{make([]byte, 1500)},
-		OnPub: func(_ mqtt.Header, _ mqtt.VariablesPublish, r io.Reader) error {
-			message, _ := io.ReadAll(r)
-			println("received message:", string(message))
-			return nil
-		},
-	})
-	println("Client created")
-	// Connect client
-	var varConn mqtt.VariablesConnect
-	println("1")
-	varConn.SetDefaultMQTT([]byte(clientId))
-	println("2")
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	println("3")
-	err = client.Connect(ctx, conn, &varConn) // Connect to server.
-	println("4")
-	cancel()
-	println("5")
+	_, err = conn.Write([]byte(message))
+
 	if err != nil {
-		// Error or loop until connect success.
-		println("connect attempt failed:", err)
+		println("Error writing response:", err)
 		return err
 	}
-	println("Connected to MQTT broker")
-
-	// // Publish on topic
-	// pubFlags, _ := mqtt.NewPublishFlags(mqtt.QoS0, false, false)
-	// pubVar := mqtt.VariablesPublish{
-	// 	TopicName: []byte(topic),
-	// }
-
-	// err = client.PublishPayload(pubFlags, pubVar, []byte(message))
-	// if err != nil {
-	// 	println("failed to publish: ", err)
-	// 	return err
-	// }
-
-	// time.Sleep(time.Second)
-
-	// conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-
-	client.Disconnect(err)
+	println("Request processed at: ", time.Now().Format("2006-01-02 15:04:05"))
 	return nil
 }
