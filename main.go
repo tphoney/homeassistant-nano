@@ -57,7 +57,7 @@ func main() {
 
 	println("Server listening on port 80...")
 
-	for {
+	for i := 0; ; i++ {
 		// Accept incoming connection
 		conn, err = listener.Accept()
 		if err != nil {
@@ -78,6 +78,12 @@ func main() {
 			time.Sleep(5 * time.Second)
 		}
 		conn.Close()
+
+		if i == 50 {
+			println("Resetting after 50 requests")
+			time.Sleep(5 * time.Second)
+			machine.CPUReset()
+		}
 	}
 }
 
@@ -108,6 +114,6 @@ func handleHTTPConnection() (err error) {
 		println("Error writing response:", err)
 		return err
 	}
-	println("Request processed")
+	println("Request processed at: ", time.Now().Format("2006-01-02 15:04:05"))
 	return nil
 }
